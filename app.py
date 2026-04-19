@@ -100,6 +100,7 @@ MANUAL_STATE_CATALOG = [
 ]
 
 NO_ASSEMBLY_UTS = {"AN", "CH", "DN", "LA", "LD"}
+BUNDLED_STATE_CODES = frozenset(STATE_EXAMPLE_URLS)
 
 PARTY_COLOR_MAP = {
     "BJP": "#FF9933",
@@ -1010,7 +1011,11 @@ def load_state_analysis_bundle(
         selected_df = load_csv_from_bytes(uploaded_bytes, uploaded_name or "uploaded.csv", cache_bust=cache_bust)
         source_label = f"Uploaded CSV: {uploaded_name or 'uploaded.csv'}"
     if selected_df is None:
-        raise ValueError("No state dataset could be loaded. Provide a bundled example, raw GitHub CSV URL, or upload a CSV.")
+        state_name = state_lookup.loc[state_lookup["state_code"] == state_code, "state_name"]
+        state_label = state_name.iloc[0] if not state_name.empty else state_code
+        if state_code in NO_ASSEMBLY_UTS:
+            raise ValueError(f"{state_label} does not have a legislative assembly. Upload a CSV or provide a raw GitHub CSV URL.")
+        raise ValueError(f"No bundled online dataset is configured for {state_label}. Upload a CSV or provide a raw GitHub CSV URL.")
     normalized = normalize_generic(selected_df, state_lookup, source_label)
     if normalized["state"].isna().all():
         state_name = state_lookup.loc[state_lookup["state_code"] == state_code, "state_name"]
@@ -2062,13 +2067,27 @@ def main() -> None:
 
     if mode == "State Assembly":
         options = state_lookup.copy()
-        options["label"] = options.apply(lambda r: f"{r['state_name']} ({r['state_code']})", axis=1)
-        selected_state_name = st.sidebar.selectbox("State / UT", options["label"].tolist())
+        options["label"] = options.apply(
+            lambda r: (
+                f"{r['state_name']} ({r['state_code']})"
+                if r["state_code"] in BUNDLED_STATE_CODES
+                else f"{r['state_name']} ({r['state_code']}) - needs URL/upload"
+            ),
+            axis=1,
+        )
+        default_state_index = 0
+        bundled_matches = options.index[options["state_code"].isin(BUNDLED_STATE_CODES)].tolist()
+        if bundled_matches:
+            default_state_index = int(bundled_matches[0])
+        selected_state_name = st.sidebar.selectbox("State / UT", options["label"].tolist(), index=default_state_index)
         selected_state_code = options.loc[options["label"] == selected_state_name, "state_code"].iloc[0]
         state_info = state_lookup.loc[state_lookup["state_code"] == selected_state_code].iloc[0]
-        st.sidebar.caption(f"Selected: {state_info['state_name']} [{state_info['state_status']}]")
+        availability_note = "Bundled example available" if selected_state_code in BUNDLED_STATE_CODES else "Custom URL or CSV needed"
+        st.sidebar.caption(f"Selected: {state_info['state_name']} [{state_info['state_status']}] | {availability_note}")
         if selected_state_code in NO_ASSEMBLY_UTS:
             st.sidebar.warning("This UT does not have an assembly election dataset. Use a custom raw GitHub CSV URL or upload a CSV.")
+        elif selected_state_code not in BUNDLED_STATE_CODES:
+            st.sidebar.info("No bundled online dataset is configured for this state yet. Add a raw GitHub CSV URL or upload a CSV.")
         custom_url = st.sidebar.text_input("Custom raw GitHub CSV URL", value="", placeholder="https://raw.githubusercontent.com/.../your_file.csv")
 
     refresh_clicked = st.sidebar.button("Load Latest Online Data", use_container_width=True)
@@ -2088,6 +2107,13 @@ def main() -> None:
             analysis_df, base_df, source_label = load_national_analysis_bundle(st.session_state.refresh_nonce)
         else:
             uploaded_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
+            if not custom_url.strip() and uploaded_bytes is None and selected_state_code not in BUNDLED_STATE_CODES:
+                state_label = state_lookup.loc[state_lookup["state_code"] == selected_state_code, "state_name"].iloc[0]
+                loading_box.info(
+                    f"No bundled online dataset is configured for {state_label}. Add a raw GitHub CSV URL or upload a CSV to analyze this assembly."
+                )
+                progress.empty()
+                st.stop()
             analysis_df, source_label = load_state_analysis_bundle(
                 selected_state_code,
                 custom_url,
