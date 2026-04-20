@@ -1670,7 +1670,7 @@ def manual_poll_map_from_inputs(parties: List[str], values: Dict[str, float], up
             for _, row in tmp.iterrows():
                 poll_map[str(row["party_norm"])] = float(row["share_val"])
     for party, val in values.items():
-        if val is not None and not np.isnan(val):
+        if val is not None and not np.isnan(val) and float(val) > 0:
             poll_map[party] = float(val)
     total = sum(v for v in poll_map.values() if v > 0)
     if total > 0:
@@ -1836,37 +1836,55 @@ def render_prediction_tab(
     year_max = year_min + 15
     future_year = st.number_input("Future election year", min_value=year_min, max_value=year_max, value=max(year_min, future_year_default), step=1)
 
-    with st.expander("Opinion Poll / Hypothetical Vote % Inputs", expanded=True):
-        poll_file = st.file_uploader("Upload opinion-poll CSV", type=["csv"], key="poll_upload")
-        top_parties = corpus.groupby("party")["seat"].sum().sort_values(ascending=False).head(8).index.tolist()
-        if not top_parties:
-            top_parties = party_summary_top_parties(filtered_df)
-        manual_cols = st.columns(2)
-        manual_values = {}
-        for idx, party in enumerate(top_parties):
-            with manual_cols[idx % 2]:
-                manual_values[party] = st.number_input(
-                    f"{party} vote %",
-                    min_value=0.0,
-                    max_value=100.0,
-                    value=float(max(1.0, min(40.0, 100.0 / max(len(top_parties), 1)))),
-                    step=0.1,
-                    key=f"manual_poll_{party}",
-                )
-        upload_df = None
-        if poll_file is not None:
-            try:
-                upload_df = load_csv_from_bytes(poll_file.getvalue(), poll_file.name, cache_bust)
-                st.success("Opinion-poll CSV loaded.")
-                st.dataframe(upload_df.head(10), use_container_width=True)
-            except Exception as exc:
-                st.warning(f"Poll CSV could not be parsed: {exc}")
-        poll_map = manual_poll_map_from_inputs(top_parties, manual_values, upload_df)
-        if poll_map:
-            st.caption("Poll input was normalized to a 100% share base before being blended into predictions.")
-            st.dataframe(pd.DataFrame({"party": list(poll_map.keys()), "poll_share": list(poll_map.values())}).sort_values("poll_share", ascending=False), use_container_width=True, hide_index=True)
+    st.caption("Default prediction uses historical election results only. Opinion-poll inputs are optional and turned off by default.")
+    use_poll_override = st.toggle(
+        "Use optional opinion-poll inputs",
+        value=False,
+        help="Leave this off to let the model predict from historical trends without any manual opinion input.",
+    )
 
-    predict_now = st.button("Run Prediction", type="primary", use_container_width=True)
+    top_parties = corpus.groupby("party")["seat"].sum().sort_values(ascending=False).head(8).index.tolist()
+    if not top_parties:
+        top_parties = party_summary_top_parties(filtered_df)
+
+    poll_map: Dict[str, float] = {}
+    if use_poll_override:
+        with st.expander("Optional opinion poll / hypothetical vote % inputs", expanded=True):
+            poll_file = st.file_uploader("Upload opinion-poll CSV", type=["csv"], key="poll_upload")
+            manual_cols = st.columns(2)
+            manual_values = {}
+            for idx, party in enumerate(top_parties):
+                with manual_cols[idx % 2]:
+                    manual_values[party] = st.number_input(
+                        f"{party} vote %",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=0.0,
+                        step=0.1,
+                        key=f"manual_poll_{party}",
+                    )
+            upload_df = None
+            if poll_file is not None:
+                try:
+                    upload_df = load_csv_from_bytes(poll_file.getvalue(), poll_file.name, cache_bust)
+                    st.success("Opinion-poll CSV loaded.")
+                    st.dataframe(upload_df.head(10), use_container_width=True)
+                except Exception as exc:
+                    st.warning(f"Poll CSV could not be parsed: {exc}")
+            poll_map = manual_poll_map_from_inputs(top_parties, manual_values, upload_df)
+            if poll_map:
+                st.caption("Poll input was normalized to a 100% share base before being blended into predictions.")
+                st.dataframe(
+                    pd.DataFrame({"party": list(poll_map.keys()), "poll_share": list(poll_map.values())}).sort_values("poll_share", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("No positive poll values were provided, so the forecast will still run as a model-only prediction.")
+    else:
+        st.info("Model-only forecast is active. The prediction will be generated from historical vote share, turnout, margins, and seat trends.")
+
+    predict_now = st.button("Run Model Prediction", type="primary", use_container_width=True)
 
     if not predict_now and "latest_prediction" in st.session_state and st.session_state.get("prediction_signature") == str((mode, future_year, selected_state_code, sorted(poll_map.items()))):
         cached = st.session_state["latest_prediction"]
