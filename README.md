@@ -127,13 +127,11 @@ The primary objective of this project is to understand how data analysis and mac
 
 ---
 
-## 👨‍💻 Author
+## 👨‍💻 Dev~
 
 **Gautam Singla**
 
-B.Tech Electronics & Communication Engineering (VLSI)
 
-Manav Rachna University
 
 ---
 
